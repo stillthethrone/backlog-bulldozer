@@ -1,0 +1,4 @@
+created_issues.json
+*.xlsx
+.env
+__pycache__/
