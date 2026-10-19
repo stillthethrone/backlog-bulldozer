@@ -4,7 +4,9 @@
 
 **backlog-bulldozer** reads an Excel planning file and creates issues in Backlog through its API. Each UC becomes a parent task, and each row in the spreadsheet becomes a `[BE]` or `[FE]` child task, with assignee, priority, start date, due date, and estimated hours already filled in.
 
-> **Status:** the Excel parsing works correctly. The task creation part has **not yet been tested against a real Backlog space** (no API key was available at the time of writing). Always run a dry-run first.
+It can also read a Daily Report workbook, reuse or create one monthly issue, and add one Backlog comment per report date.
+
+> **Status:** the Sprint importer has been used against the HRM Backlog project. The Daily Report workflow is new; always run `--check` and an API-backed dry-run before using `--run`.
 
 ## Features
 
@@ -110,12 +112,14 @@ With the sample Sprint 3 file, the script reads:
 
 ## Security
 
-- Never commit your API key, Excel files, or `created_issues.json` to Git.
+- Never commit your API key, state files, or unreviewed Excel exports. The Daily Report workbook in `reports/` is intentionally versioned for this workflow.
 - Suggested `.gitignore`:
 
 ```
 created_issues.json
+daily_report_state.json
 *.xlsx
+!reports/Daily_Report_Bach_2026-10-01_19.xlsx
 .env
 __pycache__/
 ```
@@ -127,6 +131,63 @@ __pycache__/
 - Libraries: `openpyxl`, `requests`
 
 > The `NotOpenSSLWarning` on macOS (Python built against LibreSSL) is only a version warning and does not affect execution.
+
+## Daily Report
+
+The included workbook contains the Backlog issue fields shown in the HRM Daily Report and one row for every date from 1–19 October 2026:
+
+```text
+reports/Daily_Report_Bach_2026-10-01_19.xlsx
+```
+
+It uses three sheets:
+
+- `Backlog Setup`: Project, Summary, Issue Type, Status, Priority, Assignee, Category, Milestone, Version, Start Date, Due Date, Estimated Hours, Actual Hours, Resolution, and Existing Issue Key.
+- `Daily Reports`: Report Date, work completed, result, blockers, next plan, hours, Git evidence, an optional Backlog comment override, and posted issue key. The supplied comment cells are blank so the script generates consistent Markdown from the other columns.
+- `Git Activity`: complete commit/MR evidence used to prepare the daily summaries; the importer treats this sheet as read-only supporting data.
+
+The supplied workbook targets the existing monthly issue `HRM-319`. Remove `Existing Issue Key` or pass a different `--issue` only when you intentionally want another issue.
+
+### Check locally
+
+```bash
+python3 daily_report_to_backlog.py \
+  --file reports/Daily_Report_Bach_2026-10-01_19.xlsx \
+  --check
+```
+
+This validates the two required import sheets without asking for an API key or calling Backlog; `Git Activity` remains read-only evidence.
+
+### API-backed dry-run
+
+```bash
+python3 daily_report_to_backlog.py \
+  --file reports/Daily_Report_Bach_2026-10-01_19.xlsx
+```
+
+The dry-run reads the project configuration and existing comments but does not create or update anything.
+
+To review only one date:
+
+```bash
+python3 daily_report_to_backlog.py \
+  --file reports/Daily_Report_Bach_2026-10-01_19.xlsx \
+  --date 2026-10-14
+```
+
+### Post the comments
+
+```bash
+python3 daily_report_to_backlog.py \
+  --file reports/Daily_Report_Bach_2026-10-01_19.xlsx \
+  --run
+```
+
+The script resolves Issue Type, Priority, Assignee, Status, Milestone, and Version by exact name. It writes `daily_report_state.json` after every successful comment and embeds a date/content marker in each comment so rerunning does not post duplicates.
+
+Backlog records the real time when a comment is posted. It cannot backdate comments through the API, so the historical report date is included in each comment heading.
+
+API references: [Add Issue](https://developer.nulab.com/docs/backlog/api/2/add-issue/), [Update Issue](https://developer.nulab.com/docs/backlog/api/2/update-issue/), and [Add Comment](https://developer.nulab.com/docs/backlog/api/2/add-comment/).
 
 ## License
 

@@ -1,4 +1,6 @@
 created_issues.json
+daily_report_state.json
 *.xlsx
+!reports/Daily_Report_Bach_2026-10-01_19.xlsx
 .env
 __pycache__/
