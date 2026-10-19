@@ -8,14 +8,14 @@
 
 ## Features
 
-- Reads the Excel file from `~/Downloads`, or from a path given with `--file`.
+- Reads the legacy `Backlog` layout and the Sprint 6 layout; use `--file` to select the workbook.
 - By default **only creates tasks that are not Done** and skips finished ones. Add `--all` to create Done tasks as well.
 - Each UC becomes one parent task containing its BE/FE child tasks.
 - Matches the Assignee by name and warns if no match is found.
 - Creates the Category and Milestone automatically if they do not exist.
 - Saves created tasks to `created_issues.json`, so re-running does not create duplicates.
 - **Dry-run by default**: nothing is created until you add `--run`.
-- The API key is prompted at runtime (input is hidden), so it is never stored in a file or environment variable.
+- The API key is prompted at runtime (input is hidden), unless `BACKLOG_API_KEY` is already set. The script does not save the key.
 
 ## Getting started
 
@@ -29,21 +29,31 @@ pip3 install openpyxl requests
 
 In Backlog: **Personal settings** -> **API** -> create a new key.
 
-### 3. Dry-run
+### 3. Check the Excel locally
 
 ```bash
-python3 excel_to_backlog.py
+python3 excel_to_backlog.py --file ~/Downloads/Sprint.xlsx --milestone "Sprint 6" --check
+```
+
+This validates the workbook and prints task, UC, status, and hour totals without asking for an API key or calling Backlog.
+
+### 4. Dry-run one UC
+
+```bash
+python3 excel_to_backlog.py --file ~/Downloads/Sprint.xlsx --milestone "Sprint 6" --uc "UC-12.13"
 ```
 
 The script asks for your API key, then prints the list of tasks it would create along with any warnings. **Nothing is created in Backlog.**
 
 > The dry-run still calls the API to read project information and validate Assignee names, so an API key is still required.
 
-### 4. Create for real
+### 5. Create that UC for real
 
 ```bash
-python3 excel_to_backlog.py --run
+python3 excel_to_backlog.py --file ~/Downloads/Sprint.xlsx --milestone "Sprint 6" --uc "UC-12.13" --run
 ```
+
+After checking that UC in Backlog, remove `--uc "UC-12.13"` to process the remaining UCs. Keep `created_issues.json`; it prevents the pilot UC from being created again.
 
 > **Common macOS (zsh) pitfall:** do not paste a trailing `# comment` after the command. zsh does not treat `#` as a comment by default, so the comment is passed to the script as arguments and you get `unrecognized arguments`. Paste only the command itself.
 
@@ -51,11 +61,13 @@ python3 excel_to_backlog.py --run
 
 | Option | Description |
 |---|---|
-| `--file FILE` | Path to the Excel file (defaults to auto-detecting one in `~/Downloads`) |
+| `--file FILE` | Path to the Excel file (always pass this for Sprint 6) |
 | `--space SPACE` | Backlog space, e.g. `d-soft-prj.backlog.com` |
 | `--project PROJECT` | Project key, e.g. `HRM` |
 | `--milestone MILESTONE` | Milestone name (default `Sprint 3`, created if missing) |
 | `--all` | Also create tasks that are already Done (Done -> Closed) |
+| `--uc UC` | Only process one exact UC, useful for a pilot run |
+| `--check` | Validate the Excel locally without calling the Backlog API |
 | `--run` | Create for real. Without this option the script only does a dry-run |
 
 Example:
@@ -76,7 +88,7 @@ python3 excel_to_backlog.py --file ~/Downloads/Sprint_3.xlsx --milestone "Sprint
 | **Category** | Module + Backend/Frontend |
 | **Milestone** | `Sprint 3` (change with `--milestone`) |
 | **Start Date / Due Date** | Start date / end date |
-| **Estimated Hours** | Estimate (days) x 8 |
+| **Estimated Hours** | `Estimate (giờ)` directly; legacy day-based files are converted with days x 8 |
 | **Parent issue** | Each UC is a parent task containing its BE/FE tasks |
 
 ## Things to know
