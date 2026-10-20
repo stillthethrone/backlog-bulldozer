@@ -27,6 +27,23 @@ It can also read a Daily Report workbook, reuse or create one monthly issue, and
 pip3 install openpyxl requests
 ```
 
+### Chạy bằng menu đơn giản
+
+Chỉ cần một lệnh:
+
+```bash
+python3 backlog.py
+```
+
+Sau đó chọn:
+
+```text
+1. Đẩy task mới lên Backlog
+2. Đẩy Daily Report lên Backlog
+```
+
+Menu sẽ hỏi đường dẫn file Excel trên máy (có thể kéo-thả từ Finder hoặc dùng `file://`), tự kiểm tra file, yêu cầu xác nhận chạy thật và cho nhập API Key ở chế độ ẩn. Khi nhập task, Milestone được gợi ý từ tên file như `Sprint 6_Final.xlsx`; bạn có thể nhấn Enter để giữ hoặc nhập tên khác. Khi nhập Daily Report, menu hỏi riêng có thay thế các comment cũ do công cụ tạo hay không.
+
 ### 2. Get an API key
 
 In Backlog: **Personal settings** -> **API** -> create a new key.
