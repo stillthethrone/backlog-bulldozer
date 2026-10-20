@@ -28,7 +28,6 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 from openpyxl import load_workbook
 
 
-DEFAULT_FILE = Path(__file__).with_name("reports") / "Daily_Report_Bach_2026-10-01_19.xlsx"
 STATE_FILE = Path(__file__).with_name("daily_report_state.json")
 BACKUP_FILE = Path(__file__).with_name("daily_report_comment_backup.json")
 SETUP_SHEET = "Backlog Setup"
@@ -616,7 +615,7 @@ def print_local_check(path, setup, reports):
 
 def main():
     parser = argparse.ArgumentParser(description="Tạo Daily Report trên Backlog từ Excel")
-    parser.add_argument("--file", default=str(DEFAULT_FILE))
+    parser.add_argument("--file", required=True, help="Đường dẫn file Excel Daily Report")
     parser.add_argument("--space", default=os.environ.get("BACKLOG_SPACE", "d-soft-prj.backlog.com"))
     parser.add_argument("--project", default=os.environ.get("BACKLOG_PROJECT"))
     parser.add_argument("--issue", help="Issue key có sẵn, ví dụ HRM-319")
