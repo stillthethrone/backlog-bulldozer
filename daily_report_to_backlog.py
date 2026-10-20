@@ -20,6 +20,7 @@ import re
 import sys
 import time
 import unicodedata
+from collections import defaultdict
 from datetime import date, datetime
 from pathlib import Path
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
@@ -29,6 +30,7 @@ from openpyxl import load_workbook
 
 DEFAULT_FILE = Path(__file__).with_name("reports") / "Daily_Report_Bach_2026-10-01_19.xlsx"
 STATE_FILE = Path(__file__).with_name("daily_report_state.json")
+BACKUP_FILE = Path(__file__).with_name("daily_report_comment_backup.json")
 SETUP_SHEET = "Backlog Setup"
 REPORT_SHEET = "Daily Reports"
 
@@ -52,11 +54,12 @@ SETUP_HEADERS = (
 REPORT_HEADERS = (
     "Report Date",
     "Day",
-    "Work Done",
-    "Result / Deliverable",
-    "Blockers",
-    "Next Plan",
-    "Actual Hours",
+    "Task",
+    "Details",
+    "Backlog ID",
+    "Duration Hours",
+    "Progress",
+    "Delay / Issues",
     "Git Repository",
     "Git References",
     "Git URLs",
@@ -98,6 +101,19 @@ def optional_float(value, label):
         number = float(value)
     except (TypeError, ValueError) as exc:
         raise ValueError(f"{label} không phải số: {value}") from exc
+    return number
+
+
+def progress_value(value, label):
+    if value in (None, ""):
+        raise ValueError(f"{label} không được để trống")
+    text = str(value).strip()
+    try:
+        number = float(text[:-1]) / 100 if text.endswith("%") else float(value)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"{label} không phải phần trăm hợp lệ: {value}") from exc
+    if not 0 <= number <= 1:
+        raise ValueError(f"{label} phải nằm trong khoảng 0%..100%: {value}")
     return number
 
 
@@ -173,7 +189,7 @@ def read_workbook(path):
     report_row, report_columns = find_header_row(
         report_sheet,
         REPORT_HEADERS,
-        ("Report Date", "Work Done", "Result / Deliverable"),
+        ("Report Date", "Task", "Details", "Duration Hours", "Progress"),
     )
     reports = []
     for source_row, values in enumerate(
@@ -190,7 +206,11 @@ def read_workbook(path):
         for header in REPORT_HEADERS:
             report.setdefault(header, None)
         report["Report Date"] = as_date(report["Report Date"], f"Report Date dòng {source_row}")
-        report["Actual Hours"] = optional_float(report["Actual Hours"], f"Actual Hours dòng {source_row}")
+        report["Duration Hours"] = optional_float(
+            report["Duration Hours"],
+            f"Duration Hours dòng {source_row}",
+        )
+        report["Progress"] = progress_value(report["Progress"], f"Progress dòng {source_row}")
         report["_source_row"] = source_row
         reports.append(report)
 
@@ -208,22 +228,22 @@ def validate_workbook(setup, reports):
     if not reports:
         raise ValueError(f"Sheet '{REPORT_SHEET}' chưa có báo cáo")
 
-    seen_dates = set()
+    daily_hours = defaultdict(float)
     for report in reports:
         report_date = report["Report Date"]
         row = report["_source_row"]
-        if report_date in seen_dates:
-            raise ValueError(f"Report Date bị trùng tại dòng {row}: {report_date.isoformat()}")
-        seen_dates.add(report_date)
         if not setup["Start Date"] <= report_date <= setup["Due Date"]:
             raise ValueError(f"Report Date dòng {row} nằm ngoài Start Date/Due Date")
-        if not one_line(report["Work Done"]):
-            raise ValueError(f"Work Done không được để trống tại dòng {row}")
-        if not one_line(report["Result / Deliverable"]):
-            raise ValueError(f"Result / Deliverable không được để trống tại dòng {row}")
-        hours = report["Actual Hours"]
-        if hours is not None and not 0 <= hours <= 24:
-            raise ValueError(f"Actual Hours phải nằm trong khoảng 0..24 tại dòng {row}")
+        for header in ("Task", "Details"):
+            if not one_line(report[header]):
+                raise ValueError(f"{header} không được để trống tại dòng {row}")
+        hours = report["Duration Hours"]
+        if hours is None or not 0 < hours <= 24:
+            raise ValueError(f"Duration Hours phải nằm trong khoảng (0..24] tại dòng {row}")
+        daily_hours[report_date] += hours
+    for report_date, total in daily_hours.items():
+        if total > 24:
+            raise ValueError(f"Tổng Duration Hours ngày {report_date.isoformat()} vượt 24 giờ: {total:g}")
 
 
 def markdown_list(value, empty_text):
@@ -235,27 +255,82 @@ def markdown_list(value, empty_text):
     return "\n".join(lines) if lines else f"- {empty_text}"
 
 
-def comment_body(report):
-    explicit = str(report.get("Backlog Comment") or "").strip()
-    if explicit:
-        body = explicit
+def markdown_cell(value):
+    return one_line(value).replace("\\", "\\\\").replace("|", "\\|") or "—"
+
+
+def comment_body(reports):
+    if isinstance(reports, dict):
+        reports = [reports]
+    if not reports:
+        raise ValueError("Không có dòng công việc để tạo comment")
+    report_date = reports[0]["Report Date"]
+    if any(report["Report Date"] != report_date for report in reports):
+        raise ValueError("Một comment chỉ được chứa công việc của cùng một ngày")
+
+    explicit_comments = {
+        str(report.get("Backlog Comment") or "").strip()
+        for report in reports
+        if str(report.get("Backlog Comment") or "").strip()
+    }
+    if len(explicit_comments) > 1:
+        raise ValueError(f"Ngày {report_date.isoformat()} có nhiều Backlog Comment override khác nhau")
+    if explicit_comments:
+        body = explicit_comments.pop()
     else:
-        references = str(report.get("Git References") or "").strip()
-        urls = str(report.get("Git URLs") or "").strip()
-        git_text = "\n".join(part for part in (references, urls) if part)
-        hours = report.get("Actual Hours")
-        hours_section = f"\n\n### Actual Hours\n- {hours:g} giờ" if hours is not None else ""
-        body = (
-            f"## Daily Report {report['Report Date'].strftime('%d/%m/%Y')}\n\n"
-            f"### Công việc đã thực hiện\n{markdown_list(report.get('Work Done'), 'Chưa có dữ liệu.')}\n\n"
-            f"### Kết quả\n{markdown_list(report.get('Result / Deliverable'), 'Chưa có dữ liệu.')}\n\n"
-            f"### Vướng mắc\n{markdown_list(report.get('Blockers'), 'Không có.')}\n\n"
-            f"### Kế hoạch tiếp theo\n{markdown_list(report.get('Next Plan'), 'Chưa có dữ liệu.')}\n\n"
-            f"### Git/MR liên quan\n{markdown_list(git_text, 'Không có commit/MR được xác nhận.')}"
-            f"{hours_section}"
-        )
+        table_rows = []
+        finished = []
+        issues = []
+        ignored_issues = {"", "-", "—", "nothing", "none", "n/a", "na", "khong co", "không có"}
+        for report in reports:
+            hours = report["Duration Hours"]
+            progress = report["Progress"]
+            progress_percent = progress * 100
+            progress_text = f"{progress_percent:g}%"
+            table_rows.append(
+                "| "
+                + " | ".join((
+                    markdown_cell(report["Task"]),
+                    markdown_cell(report["Details"]),
+                    markdown_cell(report.get("Backlog ID")),
+                    f"{hours:g}h",
+                    progress_text,
+                ))
+                + " |"
+            )
+            if progress == 1:
+                finished.append(f"- Finished {one_line(report['Details'])}")
+            issue = one_line(report.get("Delay / Issues"))
+            if norm(issue) not in ignored_issues and issue not in issues:
+                issues.append(issue)
+
+        body = "\n".join((
+            f"# {report_date.strftime('%Y/%m/%d')}",
+            "",
+            "---",
+            "",
+            "## Daily Report",
+            "",
+            "---",
+            "",
+            "| Task | Details | Backlog ID | Duration | Progress |",
+            "| --- | --- | --- | ---: | ---: |",
+            *table_rows,
+            "",
+            "## Finish",
+            "",
+            "---",
+            "",
+            *(finished or ["- Nothing"]),
+            "",
+            "## Delay/Issues",
+            "",
+            "---",
+            "",
+            *([f"- {issue}" for issue in issues] or ["- Nothing"]),
+        ))
     digest = hashlib.sha256(body.encode("utf-8")).hexdigest()
-    marker = f"<!-- daily-report:{report['Report Date'].isoformat()}:{digest[:12]} -->"
+    marker = f"<!-- daily-report:v2:{report_date.isoformat()}:{digest[:12]} -->"
     return f"{body.rstrip()}\n\n{marker}", digest
 
 
@@ -313,19 +388,43 @@ def state_key(space, project_key, setup, issue_key=None):
     ))
 
 
+MANAGED_MARKER = re.compile(
+    r"<!--\s*daily-report:(?:(v\d+):)?(\d{4}-\d{2}-\d{2}):([0-9a-f]{6,64})\s*-->",
+    re.IGNORECASE,
+)
+
+
+def managed_comment_records(comments):
+    records = []
+    for comment in comments:
+        content = str(comment.get("content") or "")
+        marker = MANAGED_MARKER.search(content)
+        if not marker:
+            continue
+        records.append({
+            "id": comment.get("id"),
+            "date": marker.group(2),
+            "hash": marker.group(3).lower(),
+            "version": marker.group(1) or "v1",
+            "content": content,
+            "created": comment.get("created"),
+            "updated": comment.get("updated"),
+        })
+    return records
+
+
 def index_existing_comments(comments):
     indexed = {}
+    for record in managed_comment_records(comments):
+        indexed.setdefault(record["date"], set()).add(record["hash"])
+
     heading_pattern = re.compile(
         r"(?im)^#{0,6}\s*\[?daily report\]?\s*[-:]?\s*(\d{1,2}/\d{1,2}/\d{4})\s*$"
     )
     for comment in comments:
         content = str(comment.get("content") or "")
-        if "<!-- daily-report:" in content:
-            marker = content.rsplit("<!-- daily-report:", 1)[-1].split(" -->", 1)[0]
-            marker_date, separator, marker_hash = marker.partition(":")
-            if separator:
-                indexed.setdefault(marker_date, set()).add(marker_hash)
-                continue
+        if MANAGED_MARKER.search(content):
+            continue
         heading = heading_pattern.search(content)
         if heading:
             try:
@@ -334,6 +433,47 @@ def index_existing_comments(comments):
                 continue
             indexed.setdefault(report_date, set()).add("legacy")
     return indexed
+
+
+def get_all_comments(api, issue_key):
+    comments = []
+    seen_ids = set()
+    cursor = None
+    while True:
+        params = {"count": 100, "order": "asc"}
+        if cursor is not None:
+            params["minId"] = cursor
+        batch = api("GET", f"/issues/{issue_key}/comments", params=params)
+        new_comments = [comment for comment in batch if comment.get("id") not in seen_ids]
+        comments.extend(new_comments)
+        seen_ids.update(comment.get("id") for comment in new_comments)
+        numeric_ids = [comment.get("id") for comment in batch if isinstance(comment.get("id"), int)]
+        if len(batch) < 100 or not new_comments or not numeric_ids:
+            break
+        next_cursor = max(numeric_ids)
+        if cursor is not None and next_cursor <= cursor:
+            break
+        cursor = next_cursor
+    return comments
+
+
+def save_comment_backup(issue_key, comments):
+    backup_history = []
+    if BACKUP_FILE.exists():
+        try:
+            backup_history = json.loads(BACKUP_FILE.read_text())
+        except (OSError, json.JSONDecodeError) as exc:
+            raise ValueError(f"Không đọc được {BACKUP_FILE.name}: {exc}") from exc
+        if not isinstance(backup_history, list):
+            raise ValueError(f"{BACKUP_FILE.name} phải chứa một danh sách backup")
+    backup_history.append({
+        "issueKey": issue_key,
+        "backedUpAt": datetime.now().astimezone().isoformat(),
+        "comments": comments,
+    })
+    temp = BACKUP_FILE.with_name(f"{BACKUP_FILE.name}.tmp")
+    temp.write_text(json.dumps(backup_history, ensure_ascii=False, indent=2))
+    temp.replace(BACKUP_FILE)
 
 
 def build_issue_payload(setup, context):
@@ -458,10 +598,19 @@ def resolve_context(api, setup, project_key):
 
 
 def print_local_check(path, setup, reports):
-    no_git = sum(1 for report in reports if not one_line(report.get("Git References")))
-    print(f"Đọc {path}: {len(reports)} báo cáo từ {reports[0]['Report Date']} đến {reports[-1]['Report Date']}")
+    dates = sorted({report["Report Date"] for report in reports})
+    no_git_dates = {
+        report["Report Date"]
+        for report in reports
+        if not one_line(report.get("Git References"))
+    }
+    total_hours = sum(report["Duration Hours"] for report in reports)
+    print(
+        f"Đọc {path}: {len(reports)} dòng công việc thuộc {len(dates)} ngày "
+        f"từ {dates[0]} đến {dates[-1]}"
+    )
     print(f"Issue: {setup['Summary']} | {setup['Issue Type']} | {setup['Status']} | {setup['Assignee']}")
-    print(f"Ngày chưa có Git reference: {no_git}")
+    print(f"Tổng thời lượng: {total_hours:g} giờ | Ngày có dòng chưa gắn Git reference: {len(no_git_dates)}")
     print("File hợp lệ. Chưa gọi Backlog API và chưa tạo issue/comment.")
 
 
@@ -472,10 +621,18 @@ def main():
     parser.add_argument("--project", default=os.environ.get("BACKLOG_PROJECT"))
     parser.add_argument("--issue", help="Issue key có sẵn, ví dụ HRM-319")
     parser.add_argument("--date", help="Chỉ xử lý một ngày YYYY-MM-DD")
+    parser.add_argument(
+        "--replace-managed-comments",
+        action="store_true",
+        help="Xóa comment Daily Report do công cụ quản lý trong phạm vi chọn rồi đăng lại",
+    )
     mode = parser.add_mutually_exclusive_group()
     mode.add_argument("--check", action="store_true", help="Chỉ kiểm tra Excel, không gọi API")
     mode.add_argument("--run", action="store_true", help="Tạo issue/comment thật")
     args = parser.parse_args()
+
+    if args.check and args.replace_managed_comments:
+        sys.exit("--replace-managed-comments cần dry-run có API hoặc --run; không dùng cùng --check")
 
     try:
         setup, reports = read_workbook(args.file)
@@ -545,18 +702,48 @@ def main():
         if args.run:
             api("PATCH", f"/issues/{issue_key}", data={"statusId": context["status"]["id"]})
 
+    comments = []
     existing_markers = {}
     if issue_key != "DRY-RUN":
-        comments = api(
-            "GET",
-            f"/issues/{issue_key}/comments",
-            params={"count": 100, "order": "asc"},
-        )
+        comments = get_all_comments(api, issue_key)
         existing_markers = index_existing_comments(comments)
 
+    selected_dates = {report["Report Date"].isoformat() for report in reports}
+    if args.replace_managed_comments:
+        targets = [
+            record
+            for record in managed_comment_records(comments)
+            if record["date"] in selected_dates
+        ]
+        print(f"Thay thế comment do công cụ quản lý: {len(targets)} comment trên {issue_key}")
+        for target in targets:
+            print(f"  xóa {target['date']}: comment {target['id']} ({target['version']})")
+        if args.run and targets:
+            try:
+                save_comment_backup(issue_key, targets)
+                print(f"  đã backup vào {BACKUP_FILE.name}")
+                for target in targets:
+                    api("DELETE", f"/issues/{issue_key}/comments/{target['id']}")
+                    entry.setdefault("comments", {}).pop(target["date"], None)
+                    save_state(state)
+            except (OSError, RuntimeError, ValueError) as exc:
+                sys.exit(str(exc))
+        target_ids = {target["id"] for target in targets}
+        comments = [comment for comment in comments if comment.get("id") not in target_ids]
+        existing_markers = index_existing_comments(comments)
+        for date_key in selected_dates:
+            entry.setdefault("comments", {}).pop(date_key, None)
+        if args.run:
+            save_state(state)
+
+    reports_by_date = defaultdict(list)
     for report in reports:
-        body, digest = comment_body(report)
-        date_key = report["Report Date"].isoformat()
+        reports_by_date[report["Report Date"]].append(report)
+
+    for report_date in sorted(reports_by_date):
+        date_reports = reports_by_date[report_date]
+        body, digest = comment_body(date_reports)
+        date_key = report_date.isoformat()
         saved = entry.setdefault("comments", {}).get(date_key)
         if saved and saved.get("hash") == digest:
             print(f"  bỏ qua {date_key}: state đã ghi comment {saved.get('commentId')}")
@@ -572,7 +759,7 @@ def main():
             sys.exit(f"Backlog đã có Daily Report {date_key} với nội dung khác; hãy xử lý comment cũ thủ công")
         if saved and saved.get("hash") != digest:
             sys.exit(f"Nội dung {date_key} đã thay đổi sau khi đăng; hãy xử lý comment cũ thủ công")
-        print(f"  comment {date_key}: {one_line(report['Work Done'])[:100]}")
+        print(f"  comment {date_key}: {len(date_reports)} dòng công việc")
         if args.run:
             created = api("POST", f"/issues/{issue_key}/comments", data={"content": body})
             entry["comments"][date_key] = {"hash": digest, "commentId": created["id"]}

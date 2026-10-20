@@ -118,6 +118,7 @@ With the sample Sprint 3 file, the script reads:
 ```
 created_issues.json
 daily_report_state.json
+daily_report_comment_backup.json
 *.xlsx
 !reports/Daily_Report_Bach_2026-10-01_19.xlsx
 .env
@@ -143,7 +144,7 @@ reports/Daily_Report_Bach_2026-10-01_19.xlsx
 It uses three sheets:
 
 - `Backlog Setup`: Project, Summary, Issue Type, Status, Priority, Assignee, Category, Milestone, Version, Start Date, Due Date, Estimated Hours, Actual Hours, Resolution, and Existing Issue Key.
-- `Daily Reports`: Report Date, work completed, result, blockers, next plan, hours, Git evidence, an optional Backlog comment override, and posted issue key. The supplied comment cells are blank so the script generates consistent Markdown from the other columns.
+- `Daily Reports`: one or more task rows per date with Task, Details, Backlog ID, Duration Hours, Progress, Delay / Issues, Git evidence, an optional Backlog comment override, and posted issue key. The supplied workbook covers all 19 dates at 7 hours per day; dates without commits use explicit progress allocations.
 - `Git Activity`: complete commit/MR evidence used to prepare the daily summaries; the importer treats this sheet as read-only supporting data.
 
 The supplied workbook targets the existing monthly issue `HRM-319`. Remove `Existing Issue Key` or pass a different `--issue` only when you intentionally want another issue.
@@ -175,13 +176,28 @@ python3 daily_report_to_backlog.py \
   --date 2026-10-14
 ```
 
-### Post the comments
+### Replace the old generated comments and post the new format
+
+Run an API-backed preview first. It lists the generated comments that would be removed, but does not change Backlog:
 
 ```bash
 python3 daily_report_to_backlog.py \
   --file reports/Daily_Report_Bach_2026-10-01_19.xlsx \
+  --issue HRM-319 \
+  --replace-managed-comments
+```
+
+After reviewing the preview, run the replacement:
+
+```bash
+python3 daily_report_to_backlog.py \
+  --file reports/Daily_Report_Bach_2026-10-01_19.xlsx \
+  --issue HRM-319 \
+  --replace-managed-comments \
   --run
 ```
+
+Replacement only deletes comments carrying this tool's Daily Report marker within the dates selected from the workbook. It does not delete `HRM-319` or manual comments. Before deletion, it writes their full contents to `daily_report_comment_backup.json`; then it posts one comment per date in the Task / Details / Backlog ID / Duration / Progress format, followed by Finish and Delay/Issues sections.
 
 The script resolves Issue Type, Priority, Assignee, Status, Milestone, and Version by exact name. It writes `daily_report_state.json` after every successful comment and embeds a date/content marker in each comment so rerunning does not post duplicates.
 

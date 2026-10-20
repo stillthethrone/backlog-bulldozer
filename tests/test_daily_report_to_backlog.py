@@ -43,15 +43,25 @@ class DailyReportTests(unittest.TestCase):
         workbook.save(path)
         return path
 
-    def report_row(self, report_date=date(2026, 10, 14), hours=None):
+    def report_row(
+        self,
+        report_date=date(2026, 10, 14),
+        task="[retro]",
+        details="Retro toàn bộ dự án và bàn giao cho lead mới",
+        backlog_id="HRM-319",
+        hours=3,
+        progress=1,
+        delay="Nothing",
+    ):
         return [
             report_date,
-            "Wednesday",
-            "Retro toàn bộ dự án và bàn giao cho lead mới",
-            "Đã tổng hợp trạng thái, rủi ro và hạng mục tồn đọng",
-            "Không có",
-            "Hỗ trợ lead mới tiếp nhận dự án",
+            "Thứ Tư",
+            task,
+            details,
+            backlog_id,
             hours,
+            progress,
+            delay,
             "human-resource-management",
             "",
             "",
@@ -60,26 +70,53 @@ class DailyReportTests(unittest.TestCase):
             "",
         ]
 
-    def test_read_workbook_and_build_comment(self):
-        path = self.make_workbook([self.report_row(hours=8)])
+    def test_multiple_rows_same_date_build_one_table_comment(self):
+        path = self.make_workbook([
+            self.report_row(),
+            self.report_row(
+                task="[handover]",
+                details="Walkthrough cho lead mới",
+                hours=4,
+                progress=0.5,
+            ),
+        ])
         setup, reports = daily.read_workbook(path)
 
         self.assertEqual(setup["Existing Issue Key"], "HRM-319")
-        self.assertEqual(reports[0]["Report Date"], date(2026, 10, 14))
-        body, digest = daily.comment_body(reports[0])
-        self.assertIn("Daily Report 14/10/2026", body)
-        self.assertIn("Retro toàn bộ dự án", body)
-        self.assertIn("Actual Hours", body)
-        self.assertIn(digest[:12], body)
+        self.assertEqual(len(reports), 2)
+        body, digest = daily.comment_body(reports)
+        self.assertIn("# 2026/10/14", body)
+        self.assertIn("| Task | Details | Backlog ID | Duration | Progress |", body)
+        self.assertIn("| [retro] | Retro toàn bộ dự án", body)
+        self.assertIn("| [handover] | Walkthrough cho lead mới | HRM-319 | 4h | 50% |", body)
+        finish = body.split("## Finish", 1)[1].split("## Delay/Issues", 1)[0]
+        self.assertIn("Finished Retro toàn bộ dự án", finish)
+        self.assertNotIn("Finished Walkthrough", finish)
+        self.assertIn(f"daily-report:v2:2026-10-14:{digest[:12]}", body)
 
-    def test_duplicate_report_date_is_rejected(self):
-        path = self.make_workbook([self.report_row(), self.report_row()])
-        with self.assertRaisesRegex(ValueError, "bị trùng"):
-            daily.read_workbook(path)
+    def test_markdown_table_escapes_pipe(self):
+        row = self.report_row(details="API | UI đồng bộ")
+        path = self.make_workbook([row])
+        _, reports = daily.read_workbook(path)
+        body, _ = daily.comment_body(reports)
+        self.assertIn("API \\| UI đồng bộ", body)
 
     def test_invalid_hours_is_rejected(self):
         path = self.make_workbook([self.report_row(hours=25)])
         with self.assertRaisesRegex(ValueError, "0..24"):
+            daily.read_workbook(path)
+
+    def test_daily_total_over_24_is_rejected(self):
+        path = self.make_workbook([
+            self.report_row(hours=13),
+            self.report_row(task="[handover]", details="Bàn giao", hours=12),
+        ])
+        with self.assertRaisesRegex(ValueError, "vượt 24"):
+            daily.read_workbook(path)
+
+    def test_invalid_progress_is_rejected(self):
+        path = self.make_workbook([self.report_row(progress=1.1)])
+        with self.assertRaisesRegex(ValueError, "0%..100%"):
             daily.read_workbook(path)
 
     def test_build_issue_payload_keeps_backlog_fields(self):
@@ -137,16 +174,28 @@ class DailyReportTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "không khớp"):
             daily.validate_existing_issue(issue, setup, context)
 
-    def test_existing_comment_index_handles_markers_and_manual_headings(self):
+    def test_existing_comment_index_handles_v1_v2_and_manual_headings(self):
         comments = [
-            {"content": "## Daily Report 14/10/2026\n\nRetro dự án"},
-            {"content": "## Daily Report 18/10/2026\n\nDone\n\n<!-- daily-report:2026-10-18:abc123 -->"},
+            {"id": 1, "content": "## Daily Report 14/10/2026\n\nRetro dự án"},
+            {"id": 2, "content": "Done\n\n<!-- daily-report:2026-10-18:abc123 -->"},
+            {"id": 3, "content": "Done\n\n<!-- daily-report:v2:2026-10-19:def456 -->"},
         ]
 
         indexed = daily.index_existing_comments(comments)
 
         self.assertEqual(indexed["2026-10-14"], {"legacy"})
         self.assertEqual(indexed["2026-10-18"], {"abc123"})
+        self.assertEqual(indexed["2026-10-19"], {"def456"})
+
+    def test_managed_records_exclude_manual_comment(self):
+        comments = [
+            {"id": 1, "content": "## Daily Report 14/10/2026\n\nManual"},
+            {"id": 2, "content": "Old\n<!-- daily-report:2026-10-14:abc123 -->"},
+        ]
+        records = daily.managed_comment_records(comments)
+        self.assertEqual([(item["id"], item["date"], item["version"]) for item in records], [
+            (2, "2026-10-14", "v1"),
+        ])
 
     def test_state_key_separates_spaces_and_issues(self):
         path = self.make_workbook([self.report_row()])
