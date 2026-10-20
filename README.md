@@ -129,7 +129,7 @@ With the sample Sprint 3 file, the script reads:
 
 ## Security
 
-- Never commit your API key, state files, or unreviewed Excel exports. The Daily Report workbook in `reports/` is intentionally versioned for this workflow.
+- Never commit your API key, state files, or Excel data. Excel files stay on your machine and are ignored by Git.
 - Suggested `.gitignore`:
 
 ```
@@ -137,7 +137,7 @@ created_issues.json
 daily_report_state.json
 daily_report_comment_backup.json
 *.xlsx
-!reports/Daily_Report_Bach_2026-10-01_19.xlsx
+*.xlsm
 .env
 __pycache__/
 ```
@@ -152,25 +152,25 @@ __pycache__/
 
 ## Daily Report
 
-The included workbook contains the Backlog issue fields shown in the HRM Daily Report and one row for every date from 1–19 October 2026:
+Keep the Daily Report workbook on your machine and provide its path through `python3 backlog.py` or `--file`. Excel files are not stored in this repository.
 
 ```text
-reports/Daily_Report_Bach_2026-10-01_19.xlsx
+~/Downloads/Daily_Report.xlsx
 ```
 
 It uses three sheets:
 
 - `Backlog Setup`: Project, Summary, Issue Type, Status, Priority, Assignee, Category, Milestone, Version, Start Date, Due Date, Estimated Hours, Actual Hours, Resolution, and Existing Issue Key.
-- `Daily Reports`: one or more task rows per date with Task, Details, Backlog ID, Duration Hours, Progress, Delay / Issues, Git evidence, an optional Backlog comment override, and posted issue key. The supplied workbook covers all 19 dates at 7 hours per day; dates without commits use explicit progress allocations.
+- `Daily Reports`: one or more task rows per date with Task, Details, Backlog ID, Duration Hours, Progress, Delay / Issues, Git evidence, an optional Backlog comment override, and posted issue key.
 - `Git Activity`: complete commit/MR evidence used to prepare the daily summaries; the importer treats this sheet as read-only supporting data.
 
-The supplied workbook targets the existing monthly issue `HRM-319`. Remove `Existing Issue Key` or pass a different `--issue` only when you intentionally want another issue.
+Set `Existing Issue Key` in `Backlog Setup` or pass `--issue` when you want to update an existing monthly issue.
 
 ### Check locally
 
 ```bash
 python3 daily_report_to_backlog.py \
-  --file reports/Daily_Report_Bach_2026-10-01_19.xlsx \
+  --file ~/Downloads/Daily_Report.xlsx \
   --check
 ```
 
@@ -180,7 +180,7 @@ This validates the two required import sheets without asking for an API key or c
 
 ```bash
 python3 daily_report_to_backlog.py \
-  --file reports/Daily_Report_Bach_2026-10-01_19.xlsx
+  --file ~/Downloads/Daily_Report.xlsx
 ```
 
 The dry-run reads the project configuration and existing comments but does not create or update anything.
@@ -189,7 +189,7 @@ To review only one date:
 
 ```bash
 python3 daily_report_to_backlog.py \
-  --file reports/Daily_Report_Bach_2026-10-01_19.xlsx \
+  --file ~/Downloads/Daily_Report.xlsx \
   --date 2026-10-14
 ```
 
@@ -199,7 +199,7 @@ Run an API-backed preview first. It lists the generated comments that would be r
 
 ```bash
 python3 daily_report_to_backlog.py \
-  --file reports/Daily_Report_Bach_2026-10-01_19.xlsx \
+  --file ~/Downloads/Daily_Report.xlsx \
   --issue HRM-319 \
   --replace-managed-comments
 ```
@@ -208,7 +208,7 @@ After reviewing the preview, run the replacement:
 
 ```bash
 python3 daily_report_to_backlog.py \
-  --file reports/Daily_Report_Bach_2026-10-01_19.xlsx \
+  --file ~/Downloads/Daily_Report.xlsx \
   --issue HRM-319 \
   --replace-managed-comments \
   --run
